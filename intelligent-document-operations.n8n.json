@@ -1,0 +1,316 @@
+{
+  "name": "Intelligent Document Operations",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "document-operations",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Document Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input=$json.body??$json; const clean=v=>typeof v==='string'?v.trim():v; const num=v=>{if(v===''||v===null||v===undefined)return null;const n=Number(v);return Number.isFinite(n)?n:null;};\nconst document={document_id:clean(input.document_id??''),document_type:String(clean(input.document_type??'')).toUpperCase(),source:clean(input.source??'unknown'),supplier:clean(input.supplier??''),reference:clean(input.reference??''),issue_date:clean(input.issue_date??''),due_date:clean(input.due_date??''),currency:String(clean(input.currency??'')).toUpperCase(),subtotal:num(input.subtotal),tax:num(input.tax),total:num(input.total),extraction_confidence:num(input.extraction_confidence)};\nconst errors=[],supported=['INVOICE','PURCHASE_ORDER','FORM'];\nif(!document.document_id)errors.push('document_id is required'); if(!document.document_type)errors.push('document_type is required'); else if(!supported.includes(document.document_type))errors.push('unsupported document_type'); if(!document.reference)errors.push('reference is required'); if(!document.issue_date)errors.push('issue_date is required');\nif(document.document_type==='INVOICE'){if(!document.supplier)errors.push('supplier is required for invoice');if(!document.currency)errors.push('currency is required for invoice');if(document.total===null||document.total<=0)errors.push('positive total is required for invoice');}\nreturn [{json:{valid:errors.length===0,errors,document}}];"
+      },
+      "id": "normalize",
+      "name": "Normalize + Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -880,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "valid",
+      "name": "Valid Document?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -640,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d=$json.document,reasons=[],warnings=[]; const s=[d.document_type,d.supplier,d.reference,d.issue_date,d.currency,d.total].join('|').toLowerCase(); let hash=2166136261; for(let i=0;i<s.length;i++){hash^=s.charCodeAt(i);hash=Math.imul(hash,16777619);} const fingerprint=`doc_${(hash>>>0).toString(16).padStart(8,'0')}`;\nif(d.document_type==='INVOICE'){if(d.subtotal!==null&&d.tax!==null&&d.total!==null){const expected=d.subtotal+d.tax;if(Math.abs(expected-d.total)>.01)reasons.push(`invoice arithmetic mismatch: subtotal + tax = ${expected}, total = ${d.total}`);}else warnings.push('subtotal/tax arithmetic check not available'); if(d.issue_date&&d.due_date){const issue=Date.parse(d.issue_date),due=Date.parse(d.due_date);if(Number.isFinite(issue)&&Number.isFinite(due)&&due<issue)reasons.push('due date is earlier than issue date');} if(d.total!==null&&d.total>=10000)reasons.push('high-value invoice requires approval');}\nif(d.extraction_confidence!==null&&d.extraction_confidence<.85)reasons.push('low extraction confidence'); const needs_human_review=reasons.length>0; return [{json:{...$json,fingerprint,exception_reasons:reasons,warnings,needs_human_review,processing_status:needs_human_review?'REQUIRES_HUMAN_REVIEW':'AUTO_READY'}}];"
+      },
+      "id": "rules",
+      "name": "Business Rules + Fingerprint",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -390,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d=$json.document; const downstream_record={document_id:d.document_id,fingerprint:$json.fingerprint,document_type:d.document_type,source:d.source,supplier:d.supplier,reference:d.reference,issue_date:d.issue_date,due_date:d.due_date||null,currency:d.currency||null,subtotal:d.subtotal,tax:d.tax,total:d.total,extraction_confidence:d.extraction_confidence,processing_status:$json.processing_status,exception_reasons:$json.exception_reasons,warnings:$json.warnings}; return [{json:{...$json,downstream_record}}];"
+      },
+      "id": "record",
+      "name": "Build Downstream Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -140,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "r",
+              "leftValue": "={{ $json.needs_human_review }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "review",
+      "name": "Human Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        110,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{status:'queued_for_human_review',document_id:$json.document.document_id,fingerprint:$json.fingerprint,document_type:$json.document.document_type,exception_reasons:$json.exception_reasons,record:$json.downstream_record}}];"
+      },
+      "id": "human",
+      "name": "Build Exception Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        370,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{status:'auto_ready',document_id:$json.document.document_id,fingerprint:$json.fingerprint,document_type:$json.document.document_type,record:$json.downstream_record}}];"
+      },
+      "id": "auto",
+      "name": "Build Auto-ready Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        370,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "success",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        650,
+        10
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{status:'rejected',errors:$json.errors??['invalid document']}}];"
+      },
+      "id": "error",
+      "name": "Build Validation Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -390,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "reject",
+      "name": "Rejected Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        -140,
+        240
+      ]
+    }
+  ],
+  "connections": {
+    "Document Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize + Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize + Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid Document?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Document?": {
+      "main": [
+        [
+          {
+            "node": "Business Rules + Fingerprint",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Validation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Business Rules + Fingerprint": {
+      "main": [
+        [
+          {
+            "node": "Build Downstream Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Downstream Record": {
+      "main": [
+        [
+          {
+            "node": "Human Review?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Human Review?": {
+      "main": [
+        [
+          {
+            "node": "Build Exception Output",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Auto-ready Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Exception Output": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Auto-ready Output": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Validation Error": {
+      "main": [
+        [
+          {
+            "node": "Rejected Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

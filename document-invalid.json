@@ -1,0 +1,10 @@
+{
+  "document_id": "",
+  "document_type": "INVOICE",
+  "source": "email_attachment",
+  "supplier": "",
+  "reference": "",
+  "issue_date": "",
+  "currency": "PLN",
+  "total": -100
+}

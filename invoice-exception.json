@@ -1,0 +1,14 @@
+{
+  "document_id": "doc-2002",
+  "document_type": "INVOICE",
+  "source": "email_attachment",
+  "supplier": "North Systems Sp. z o.o.",
+  "reference": "FV/2026/0999",
+  "issue_date": "2026-09-05",
+  "due_date": "2026-09-03",
+  "currency": "PLN",
+  "subtotal": 10000,
+  "tax": 2300,
+  "total": 15000,
+  "extraction_confidence": 0.74
+}

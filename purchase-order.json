@@ -1,0 +1,11 @@
+{
+  "document_id": "doc-2003",
+  "document_type": "PURCHASE_ORDER",
+  "source": "shared_drive",
+  "supplier": "Example Supply Ltd.",
+  "reference": "PO-2026-441",
+  "issue_date": "2026-09-07",
+  "currency": "EUR",
+  "total": 1800,
+  "extraction_confidence": 0.96
+}

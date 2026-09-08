@@ -1,0 +1,14 @@
+{
+  "document_id": "doc-2001",
+  "document_type": "INVOICE",
+  "source": "email_attachment",
+  "supplier": "Baltic Office Sp. z o.o.",
+  "reference": "FV/2026/0912",
+  "issue_date": "2026-09-01",
+  "due_date": "2026-09-15",
+  "currency": "PLN",
+  "subtotal": 4000,
+  "tax": 920,
+  "total": 4920,
+  "extraction_confidence": 0.97
+}
