@@ -10,75 +10,76 @@
 
 ## Business Problem
 
-Operational teams receive invoices, purchase documents, forms, and other business records that must be checked and converted into structured data before they enter finance, ERP, CRM, or approval workflows.
+Operations teams receive invoices, purchase orders, forms, and other business documents that must be checked and converted into structured data before they can safely enter finance, ERP, CRM, or operational systems.
 
-Manual processing creates repetitive data entry, inconsistent validation, duplicate risk, and slow exception handling.
+A reliable document workflow needs more than extraction. It must validate required fields, apply business rules, identify suspicious or incomplete records, route exceptions to a human, and prepare clean records for downstream systems.
 
-This reference implementation demonstrates a document-operations pipeline that accepts extracted document content, normalizes and validates it, applies business rules, identifies exceptions, and produces a downstream-ready record.
+This project demonstrates that processing layer.
 
 ---
 
-## System Flow
+## Solution
 
-**Extracted Document Payload → Webhook → Normalize & Validate → Business Rules → Fingerprint → Structured Record → Human Review / Auto-ready → Response**
+The workflow accepts an extracted document payload and processes it through a deterministic validation and decision pipeline.
+
+It:
+
+- normalizes structured document data;
+- validates required fields;
+- applies document-specific business rules;
+- generates a deterministic document fingerprint;
+- detects financial and data-quality exceptions;
+- routes risky documents to human review;
+- prepares clean documents for downstream processing;
+- produces controlled validation errors for invalid input.
+
+The reference implementation supports:
+
+- `INVOICE`
+- `PURCHASE_ORDER`
+- `FORM`
+
+The tested scenarios focus on invoice processing.
 
 ---
 
 ## Architecture
 
-```mermaid
-flowchart LR
- A[Extracted Document Payload] --> B[Webhook]
- B --> C[Normalize + Validate]
- C -->|Invalid| X[Validation Error]
- C -->|Valid| D[Business Rules + Fingerprint]
- D --> E[Build Structured Record]
- E --> F{Human Review?}
- F -->|Yes| G[Exception Queue]
- F -->|No| H[Auto-ready]
- G --> I[Response]
- H --> I
+```text
+Extracted Document Payload
+        ↓
+Document Intake
+        ↓
+Normalize + Validate
+        ↓
+Valid Document?
+   ┌────┴────┐
+  NO         YES
+   ↓          ↓
+Validation   Business Rules
+Error        + Fingerprint
+              ↓
+        Downstream Record
+              ↓
+        Human Review?
+          ┌───┴───┐
+         YES      NO
+          ↓        ↓
+      Exception  Auto-ready
+       Output      Output
 ```
 
----
+The workflow intentionally starts from an **extracted structured payload** rather than claiming to perform OCR or binary document extraction.
 
-## Implemented in the Workflow
-
-- webhook document-data intake
-- field normalization
-- required-field validation
-- supported document-type validation
-- invoice arithmetic verification
-- due-date and amount checks
-- deterministic document fingerprint
-- downstream-ready structured record
-- explicit exception reasons
-- human-review routing
-- controlled invalid-request response
-
-The tested core is deterministic and requires no paid API.
+In a production environment, an OCR/document-intelligence provider can be connected upstream without changing the core validation and routing architecture.
 
 ---
 
-## Document Processing Model
+## Workflow Overview
 
-This workflow starts from an **extracted document payload** rather than claiming OCR on binary files.
+![Workflow overview](workflow-overview.png)
 
-| Document Type | Reference Processing |
-|---|---|
-| `INVOICE` | supplier, reference, dates, currency, subtotal/tax/total, arithmetic checks |
-| `PURCHASE_ORDER` | supplier, reference, date, currency, total |
-| `FORM` | reference, date, source metadata |
-
-A production ingestion layer can connect OCR/document-AI, email attachments, cloud storage, or ERP sources.
-
----
-
-## AI Integration Strategy
-
-The workflow is **AI/LLM-ready**, but no external AI service is claimed as implemented in the tested core.
-
-A production AI/document-intelligence layer can provide OCR, document classification, field and table extraction, normalization, and confidence scores. Deterministic validation and human-review rules remain valuable after AI extraction.
+The implementation separates intake, validation, business rules, routing, and output preparation into explicit workflow stages so each decision can be inspected and tested independently.
 
 ---
 
@@ -86,73 +87,289 @@ A production AI/document-intelligence layer can provide OCR, document classifica
 
 For invoice documents, the reference implementation checks:
 
-- required supplier and invoice identifiers
-- valid positive total
-- `subtotal + tax ≈ total`
-- due date relative to issue date
-- high-value threshold
-- extraction-confidence threshold when provided
+### Required data
+
+- document ID
+- supported document type
+- supplier
+- invoice reference
+- issue date
+- currency
+- positive invoice total
+
+### Financial consistency
+
+When subtotal, tax, and total are available:
+
+```text
+subtotal + tax ≈ total
+```
+
+An arithmetic mismatch creates an exception.
+
+### Date consistency
+
+A due date earlier than the invoice issue date creates an exception.
+
+### High-value approval
+
+Invoices with a total value of at least `10,000` are routed for human review.
+
+### Extraction confidence
+
+An extraction confidence below `0.85` creates an exception.
+
+### Fingerprinting
+
+A deterministic fingerprint is generated from normalized document attributes.
+
+This provides a stable identifier that can be extended into persistent duplicate detection or idempotency controls in production.
 
 ---
 
-## Human-in-the-loop
+## Decision Logic
 
-Human review is required when invoice arithmetic does not reconcile, the reference high-value threshold is reached, the due date precedes the issue date, or extraction confidence is low.
+A valid document with no exception reasons receives:
 
-The workflow does not automatically approve financially sensitive exceptions.
+```text
+processing_status: AUTO_READY
+needs_human_review: false
+```
+
+A valid document with one or more exception reasons receives:
+
+```text
+processing_status: REQUIRES_HUMAN_REVIEW
+needs_human_review: true
+```
+
+Invalid input is rejected before business-rule processing.
 
 ---
 
 ## Demo & Evidence
 
-Evidence screenshots will be added **after** the workflow is imported and tested in n8n.
+The core processing logic was executed in n8n using synthetic test data.
 
-Planned evidence:
+### Test 1 — Clean Invoice → Auto-ready
 
-1. complete workflow architecture
-2. clean invoice → auto-ready execution
-3. exception invoice → human-review execution
-4. invalid document → controlled rejection
+A valid invoice with consistent arithmetic, valid dates, acceptable value, and high extraction confidence successfully followed the automatic-processing path.
+
+**Expected result:** `AUTO_READY`
+
+![Clean invoice — auto-ready](clean-invoice-auto-ready.png)
+
+---
+
+### Test 2 — Exception Invoice → Human Review
+
+The exception test contained multiple deliberate risk conditions:
+
+- subtotal + tax did not match total;
+- due date was earlier than issue date;
+- invoice value exceeded the approval threshold;
+- extraction confidence was below the accepted threshold.
+
+The workflow correctly routed the document through:
+
+```text
+Human Review? → TRUE → Build Exception Output
+```
+
+**Expected result:** `REQUIRES_HUMAN_REVIEW`
+
+![Exception invoice — human review](exception-invoice-human-review.png)
+
+---
+
+### Test 3 — Invalid Document → Validation Error
+
+An invalid invoice payload was tested with missing required fields and an invalid total.
+
+The workflow rejected the document before business-rule processing:
+
+```text
+Valid Document? → FALSE → Build Validation Error
+```
+
+**Expected result:** controlled validation rejection.
+
+![Invalid document — validation error](validation-error.png)
+
+---
+
+## Test Matrix
+
+| Scenario | Expected Result | Tested |
+|---|---|---|
+| Clean invoice | Auto-ready processing | ✅ |
+| Arithmetic mismatch | Human review | ✅ |
+| Due date before issue date | Human review | ✅ |
+| High-value invoice | Human review | ✅ |
+| Low extraction confidence | Human review | ✅ |
+| Missing required invoice fields | Validation rejection | ✅ |
+| Negative invoice total | Validation rejection | ✅ |
+
+The exception conditions were intentionally combined in one invoice scenario to verify multi-rule exception routing.
 
 ---
 
 ## Reliability Considerations
 
-**Implemented in the workflow:**
+### Implemented in the workflow
 
-- input normalization and validation
-- deterministic document fingerprinting
-- arithmetic/business-rule checks
-- explicit exception reasons
-- controlled success and error responses
-- human-review gate
+- deterministic normalization;
+- required-field validation;
+- document-type validation;
+- invoice-specific validation;
+- arithmetic consistency checks;
+- date consistency checks;
+- high-value approval routing;
+- extraction-confidence checks;
+- deterministic document fingerprinting;
+- explicit auto-ready and human-review branches;
+- controlled validation-error path.
 
-**Documented for production deployment:**
+### Documented for production implementation
 
-- binary file ingestion and OCR/document-AI integration
-- persistent idempotency and duplicate prevention
-- retries and rate-limit handling
-- structured execution logging and failure alerting
-- confidence-based AI fallback strategy
+A production deployment should additionally include:
+
+- persistent idempotency storage;
+- persistent duplicate detection;
+- retries with exponential backoff;
+- rate-limit handling;
+- structured operational logging;
+- alerting for repeated failures;
+- dead-letter or failed-document handling;
+- persistent human-review queues;
+- authentication and authorization;
+- secrets management;
+- downstream API retry policies;
+- audit history and retention controls.
+
+These capabilities are documented as production extensions rather than represented as already implemented functionality.
+
+---
+
+## AI / LLM Integration
+
+The tested core is intentionally deterministic and does not require a paid AI API.
+
+AI can be introduced where probabilistic interpretation provides value, for example:
+
+- document classification;
+- extraction from unstructured text;
+- supplier-name normalization;
+- ambiguous-field interpretation;
+- exception summarization;
+- human-review assistance.
+
+Business-critical validation and routing rules remain deterministic.
+
+This keeps the system testable, provider-neutral, and easier to audit.
+
+---
+
+## Provider-neutral Design
+
+The workflow does not depend on a specific OCR, LLM, ERP, CRM, or document-intelligence vendor.
+
+Possible production integrations include:
+
+```text
+OCR / Document Intelligence
+        ↓
+Structured Payload
+        ↓
+Intelligent Document Operations
+        ↓
+ERP / CRM / Finance / Review Queue
+```
+
+External providers can therefore be replaced without redesigning the core business-rule layer.
+
+---
+
+## Repository Contents
+
+The repository includes:
+
+- n8n workflow export;
+- synthetic sample documents;
+- architecture documentation;
+- setup instructions;
+- testing documentation;
+- failure-handling notes;
+- AI integration notes;
+- production considerations;
+- interview notes;
+- test matrix;
+- tested workflow evidence.
+
+No client data, production credentials, or secrets are included.
+
+---
+
+## Setup
+
+1. Import the workflow JSON into n8n.
+2. Review the workflow nodes and validation logic.
+3. Use synthetic sample payloads for testing.
+4. Configure external credentials only when adding real integrations.
+5. Keep secrets outside workflow exports.
+
+The deterministic processing layer can be tested without a paid external API.
+
+---
+
+## Security
+
+This repository intentionally contains:
+
+- no API keys;
+- no production credentials;
+- no client documents;
+- no personal customer data;
+- no private infrastructure configuration.
+
+Environment placeholders are documented separately where applicable.
 
 ---
 
 ## Portfolio Status
 
-**Reference implementation — ready for n8n validation**
+**Working reference implementation**
 
-Built with synthetic document data and mock credentials. No client documents, production secrets, or private infrastructure are included.
+The deterministic document-processing core has been executed and validated in n8n using synthetic data across three distinct paths:
+
+- clean document → auto-ready;
+- exception document → human review;
+- invalid document → validation error.
+
+External OCR/document-intelligence services and production persistence are integration-ready architecture components and are not represented as tested production integrations.
 
 ---
 
-## Demonstrated Skills
+## What This Project Demonstrates
 
-`n8n` · `JavaScript` · `Webhooks` · `JSON` · `Document Processing` · `Data Validation` · `Business Rules` · `Deduplication` · `Exception Routing` · `Human-in-the-loop` · `AI Integration Design` · `Failure Handling` · `Documentation`
+This project demonstrates practical automation engineering beyond a simple happy-path workflow:
+
+- business-rule translation;
+- structured validation;
+- deterministic decision logic;
+- exception handling;
+- human-in-the-loop routing;
+- data-quality controls;
+- provider-neutral architecture;
+- failure-aware system design;
+- testable automation;
+- honest separation between implemented and production-planned capabilities.
 
 ---
 
-## Author
+## Portfolio
 
-**Tetiana Shtemberh**  
-AI Automation & Implementation Specialist  
-Gdańsk, Poland · 100% Remote — EU / Worldwide
+Built by **Tetiana Shtemberh**  
+**AI Automation & Implementation Specialist**
+
+`n8n · Make · REST APIs · Webhooks · JavaScript · AI/LLM · CRM · Google Workspace · Business Process Automation`
