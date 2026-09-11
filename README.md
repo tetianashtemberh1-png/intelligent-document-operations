@@ -149,6 +149,11 @@ Invalid input is rejected before business-rule processing.
 
 ## Demo & Evidence
 
+🎥 **Video Demo:**  
+https://youtu.be/gwizWcoLHdc
+
+The video demonstrates the workflow running in n8n across the main processing paths: validation, business-rule evaluation, auto-ready processing, human-review escalation, and controlled rejection.
+
 The core processing logic was executed in n8n using synthetic test data.
 
 ### Test 1 — Clean Invoice → Auto-ready
